@@ -125,7 +125,7 @@ def open_gaokao_quiz(app):
     qwin = tk.Toplevel(app.root)
     qwin.title("高考模拟答题（逐科）")
     qwin.transient(app.root)
-    qwin.geometry("720x540")
+    qwin.geometry("600x540")
 
     header = tk.Label(qwin, text="高考模拟：每科 5 选择题 + 5 填空题，答完一科点击“下一科”", wraplength=700)
     header.pack(padx=8, pady=6)
@@ -267,53 +267,17 @@ def process_gaokao_result(app, answers):
     app.update_status_labels()
     app.log_message("高考经历成为你人生的重要节点。")
 
-    # 若未考上大学，弹出选择：复读 或 打工
+    # 参加高考后，年龄增加1年（考试年结束）
+    try:
+        if app.character is not None:
+            app.character['age'] = app.character.get('age', 0) + 1
+            app.update_status_labels()
+    except Exception:
+        pass
+    # 若未考上大学，弹出选择：复读 或 打工（委托到可复用的函数）
     if uni == "未考上大学":
         try:
-            dlg = tk.Toplevel(app.root)
-            dlg.title("高考结果 - 选择")
-            dlg.transient(app.root)
-            tk.Label(dlg, text="你未考上大学，选择复读还是去打工？").pack(padx=12, pady=10)
-            bf = tk.Frame(dlg)
-            bf.pack(pady=8)
-
-            def choose_repeat():
-                dlg.destroy()
-                # 重新答题
-                open_gaokao_quiz(app)
-
-            def choose_work():
-                dlg.destroy()
-                # 使用新的打工事件模块生成一次随机事件并应用
-                try:
-                    import work_events
-                    ev = work_events.random_work_event()
-                    # 标记人生路径为打工
-                    app.character['path'] = 'work'
-                    # 应用到角色
-                    for k, delta in ev['effects'].items():
-                        if k in app.character:
-                            app.character[k] += delta
-                    app.log_message(f"打工时期事件：{ev['desc']} 影响：{ev['effects']}")
-                    app.update_status_labels()
-                    try:
-                        app.step_btn.config(state='normal')
-                    except Exception:
-                        pass
-                except Exception as e:
-                    app.log_message(f"触发打工事件失败：{e}")
-
-            tk.Button(bf, text="复读", width=12, command=choose_repeat).pack(side='left', padx=8)
-            tk.Button(bf, text="去打工", width=12, command=choose_work).pack(side='left', padx=8)
-
-            def on_close():
-                try:
-                    app.step_btn.config(state='normal')
-                except Exception:
-                    pass
-                dlg.destroy()
-
-            dlg.protocol("WM_DELETE_WINDOW", on_close)
+            show_post_gaokao_choice(app)
         except Exception:
             try:
                 app.step_btn.config(state='normal')
@@ -322,7 +286,9 @@ def process_gaokao_result(app, answers):
     else:
         # 被大学录取：设置人生路径为 college，并触发一次大学期随机事件
         try:
+            # 标注进入大学，并记录大学入学年龄（用于支持复读后年龄偏移）
             app.character['path'] = 'college'
+            app.character['college_start_age'] = app.character.get('age', 0)
             import college_events
             ev = college_events.random_college_event()
             for k, delta in ev['effects'].items():
@@ -340,3 +306,60 @@ def process_gaokao_result(app, answers):
                 app.step_btn.config(state='normal')
             except Exception:
                 pass
+
+
+def show_post_gaokao_choice(app):
+    # 将未录取后的选择对话抽离为可复用函数，便于在 simulate_year 中重新弹出
+    dlg = tk.Toplevel(app.root)
+    dlg.title("高考结果 - 选择")
+    dlg.transient(app.root)
+    tk.Label(dlg, text="你未考上大学，选择复读还是去打工？").pack(padx=12, pady=10)
+    bf = tk.Frame(dlg)
+    bf.pack(pady=8)
+
+    def choose_repeat():
+        # 复读：销毁对话并重新答题
+        # 清除等待标记
+        try:
+            if app.character and 'awaiting_post_gaokao_choice' in app.character:
+                del app.character['awaiting_post_gaokao_choice']
+        except Exception:
+            pass
+        dlg.destroy()
+        open_gaokao_quiz(app)
+
+    def choose_work():
+        # 去打工：应用一次打工事件，标记职业路径
+        try:
+            if app.character and 'awaiting_post_gaokao_choice' in app.character:
+                del app.character['awaiting_post_gaokao_choice']
+        except Exception:
+            pass
+        # 销毁对话并调用主程序的工种选择窗口，以便用户选择工厂/服务/创业
+        try:
+            dlg.destroy()
+        except Exception:
+            pass
+        try:
+            app.open_work_choices()
+        except Exception as e:
+            app.log_message(f"打开打工选择窗口失败：{e}")
+
+    tk.Button(bf, text="复读", width=12, command=choose_repeat).pack(side='left', padx=8)
+    tk.Button(bf, text="去打工", width=12, command=choose_work).pack(side='left', padx=8)
+
+    def on_close():
+        # 如果用户关闭对话：标记为等待状态，下一次“模拟一年”会重新触发该抉择
+        try:
+            if app.character:
+                app.character['awaiting_post_gaokao_choice'] = True
+                # 不在此处回退年龄，统一由 simulate_year 的 awaiting 逻辑处理
+        except Exception:
+            pass
+        try:
+            app.step_btn.config(state='normal')
+        except Exception:
+            pass
+        dlg.destroy()
+
+    dlg.protocol("WM_DELETE_WINDOW", on_close)

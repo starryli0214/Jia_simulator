@@ -11,7 +11,7 @@ class JiaSimulatorApp:
     def __init__(self, root):
         self.root = root
         #version number
-        self.app_version = "0.1.1"
+        self.app_version = "0.1.2"
         root.title(f"贾天航模拟器 v{self.app_version}")
 
         self.max_points = 25
@@ -34,6 +34,8 @@ class JiaSimulatorApp:
         # redraw bars on resize
         self.root.bind('<Configure>', lambda e: self.on_resize())
 
+        self.college_over_age = None
+        self.worker_over_age = None
         #工种：1-工人 2-服务员 3-创业小老板
         self.work = None
         self.character = None
@@ -276,6 +278,23 @@ class JiaSimulatorApp:
     def simulate_year(self):
         if not self.character:
             return
+        # 如果之前在高考后关闭了复读/打工选择框，优先重新弹出该选择（不推进年龄）
+        try:
+            if self.character.get('awaiting_post_gaokao_choice'):
+                try:
+                    self.step_btn.config(state='disabled')
+                except Exception:
+                    pass
+                try:
+                    gaokao.show_post_gaokao_choice(self)
+                except Exception:
+                    try:
+                        self.step_btn.config(state='normal')
+                    except Exception:
+                        pass
+                return
+        except Exception:
+            pass
         self.character['age'] += 1
         age = self.character['age']
         ev = None
@@ -366,61 +385,119 @@ class JiaSimulatorApp:
             ev = events.random_high_student_event()
             self.log_message(f"{age}岁：{ev['desc']} 影响：{ev['effects']}")
         if age == 18:
-            # 年满18，弹窗选择：参加高考 或 外出打工
+            # 年满18，弹窗选择：若之前未录取选择被关闭则优先重新弹出未录取选择（复读/打工），否则弹出高考或打工的初始抉择
             self.log_message(f"{age}岁：高中毕业，面临选择。")
             # 禁用“模拟一年”按钮，直到做出选择或窗口关闭
-            self.step_btn.config(state='disabled')
-            self.handle_age_18()
-
-            # 不在此处恢复按钮；恢复在选择执行完或窗口关闭时处理
+            try:
+                self.step_btn.config(state='disabled')
+            except Exception:
+                pass
+            # 如果之前在高考后关闭了“复读/打工”对话，优先重新弹出该对话
+            if self.character and self.character.get('awaiting_post_gaokao_choice'):
+                try:
+                    # 不在此处恢复按钮；恢复在对话处理或 on_close 时完成
+                    gaokao.show_post_gaokao_choice(self)
+                except Exception:
+                    try:
+                        self.step_btn.config(state='normal')
+                    except Exception:
+                        pass
+            else:
+                # 正常的 18 岁初始抉择
+                self.handle_age_18()
         path = self.character.get('path') if self.character else None
 
-        if age > 18 and age < 22:
-            if path == 'college':
+        # 大学阶段与工作阶段事件基于入学年龄动态计算（支持复读后年龄偏移）
+        if path == 'college' and self.character and 'college_start_age' in self.character:
+            start = int(self.character['college_start_age'])
+            self.college_over_age = start + 4  # 记录大学结束年龄
+            # 在大学入学后的 0..3 年（含入学当年）触发大学期事件，四年后毕业
+            if age == start:
                 self.log_message(f"你进入大学了，开始了全新的生活。")
+            if age >= start and age < start + 4:
                 ev = college_events.random_college_event()
                 self.log_message(f"{age}岁：{ev['desc']} 影响：{ev['effects']}")
-            elif path == 'work':
-                if self.work == 1:
-                    ev = work_events.random_worker_event()
-                    self.log_message(f"{age}岁：{ev['desc']} 影响：{ev['effects']}")
-                if self.work == 2:
-                    ev = work_events.random_sever_event()
-                    self.log_message(f"{age}岁：{ev['desc']} 影响：{ev['effects']}")
-                if self.work == 3:
-                    ev = work_events.random_boss_event()
-                    self.log_message(f"{age}岁：{ev['desc']} 影响：{ev['effects']}")
+        elif path == 'work' and self.character:
+            # 若记录了打工起始年龄，则在起始年龄起的若干年内触发对应工作事件（默认 4 年窗口）
+            if 'work_start_age' in self.character:
+                wstart = int(self.character['work_start_age'])
+                self.worker_over_age = wstart + 4  # 记录打工结束年龄
+                if age >= wstart and age < wstart + 4:
+                    if self.work == 1:
+                        ev = work_events.random_worker_event()
+                        self.log_message(f"{age}岁：{ev['desc']} 影响：{ev['effects']}")
+                    if self.work == 2:
+                        ev = work_events.random_sever_event()
+                        self.log_message(f"{age}岁：{ev['desc']} 影响：{ev['effects']}")
+                    if self.work == 3:
+                        ev = work_events.random_boss_event()
+                        self.log_message(f"{age}岁：{ev['desc']} 影响：{ev['effects']}")
+            else:
+                # 未记录起始年龄时，保守策略：在 19-21 岁区间触发旧行为
+                self.worker_over_age = 22  # 记录打工结束年龄
+                if age > 18 and age < 22:
+                    if self.work == 1:
+                        ev = work_events.random_worker_event()
+                        self.log_message(f"{age}岁：{ev['desc']} 影响：{ev['effects']}")
+                    if self.work == 2:
+                        ev = work_events.random_sever_event()
+                        self.log_message(f"{age}岁：{ev['desc']} 影响：{ev['effects']}")
+                    if self.work == 3:
+                        ev = work_events.random_boss_event()
+                        self.log_message(f"{age}岁：{ev['desc']} 影响：{ev['effects']}")
 
-        if age == 22:
-            if path == 'college':
+        # 毕业/转行与职业期（将年龄段基于 college_start_age / work_start_age 平移）
+        # 计算大学入学/打工起始与职业开始年龄
+        career_start = None
+        # 大学入学->毕业->职业开始 = college_start_age + 4
+        if path == 'college' and self.character and 'college_start_age' in self.character:
+            college_start = int(self.character['college_start_age'])
+            grad_age = college_start + 4
+            # 大学毕业时获得职业机会
+            if age == grad_age:
                 self.log_message(f"{age}岁：你大学毕业，通过了极嗨维电子公司的面试，成为了一名嵌入式软件工程师。")
                 self.character['智商'] += 15
                 self.character['情商'] += 15
                 self.character['身体'] += 15
                 self.character['金钱'] += 15
                 self.character['颜值'] += 15
-            elif path == 'work':
+            career_start = grad_age
+        # 打工起始 -> 若设定，职业开始视为 work_start_age + 4（与大学毕业同等年限后转正/转行）
+        if path == 'work' and self.character and 'work_start_age' in self.character:
+            wstart = int(self.character['work_start_age'])
+            transfer_age = wstart + 4
+            if age == transfer_age:
                 self.log_message(f"{age}岁：你厌倦了这个行业，想要转行，通过自学，通过了极嗨维电子公司的面试，成为了一名嵌入式软件工程师。")
                 self.character['智商'] += 15
                 self.character['情商'] += 15
                 self.character['身体'] += 15
                 self.character['金钱'] += 15
                 self.character['颜值'] += 15
+            career_start = transfer_age
+        # fallback：若没有任何起始记录则保持原始的 22 作为职业开始基准
+        if career_start is None:
+            career_start = 22
 
-        if age > 22 and age < 30:
-            self.log_message(f"你在极嗨维电子公司工作，认识很多人：庞大，林二，丁三，李四，骆五")
+        # 职业期随机事件：原先为 22-30，现在改为 career_start .. career_start+7
+        if career_start <= age < career_start + 8:
             if path in ('college', 'work'):
                 ev = events.random_work_event()
                 self.log_message(f"{age}岁：{ev['desc']} 影响：{ev['effects']}")
 
-        if age == 24:
-            if self.character['颜值'] > 50:
-                self.log_message('24岁：遇到欧文。')
-            if self.character['情商'] < 50:
-                self.log_message('24岁：与庞大决裂，友情出现裂痕。')
+        if age == career_start + 1:
+            self.log_message(f"你在极嗨维电子公司工作，认识很多人：庞大，林二，丁三，李四，骆五")
 
-        if age == 30:
+        # 中期标记（原24岁 -> career_start+2）
+        if age == career_start + 2:
+            if self.character['颜值'] > 50:
+                self.log_message(f"{age}岁：遇到欧文。")
+            if self.character['情商'] < 50:
+                self.log_message(f"{age}岁：与庞大决裂，友情出现裂痕。")
+
+        # 稳定期标记（原30岁 -> career_start+8）
+        if age == career_start + 8:
             self.log_message(f"{age}岁：海纳苑买房，事业稳定，生活幸福。")
+            self.log_message(f"游戏结束，恭喜你成为幸福的贾天航！")
 
         # 若本年有随机事件则应用
         if ev:
@@ -474,6 +551,13 @@ class JiaSimulatorApp:
                 self.step_btn.config(state='normal')
             except Exception:
                 pass
+            # 将年龄回退一岁，使得再次点击“模拟一年”会重新触发该选择
+            try:
+                if self.character and self.character.get('age', 0) >= 18:
+                    self.character['age'] -= 1
+                    self.update_status_labels()
+            except Exception:
+                pass
             dlg.destroy()
 
         dlg.protocol("WM_DELETE_WINDOW", on_close)
@@ -509,6 +593,8 @@ class JiaSimulatorApp:
             # mark career path
             if self.character:
                 self.character['path'] = 'work'
+                # 记录打工起始年龄（支持在复读后选择打工）
+                self.character['work_start_age'] = self.character.get('age', 0)
             try:
                 self.step_btn.config(state='normal')
             except Exception:
@@ -520,6 +606,7 @@ class JiaSimulatorApp:
             self.work = 2
             if self.character:
                 self.character['path'] = 'work'
+                self.character['work_start_age'] = self.character.get('age', 0)
             try:
                 self.step_btn.config(state='normal')
             except Exception:
@@ -531,6 +618,7 @@ class JiaSimulatorApp:
             self.work = 3
             if self.character:
                 self.character['path'] = 'work'
+                self.character['work_start_age'] = self.character.get('age', 0)
             try:
                 self.step_btn.config(state='normal')
             except Exception:
