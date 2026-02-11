@@ -1,0 +1,20 @@
+__pycache__/
+
+# 补充：忽略单独的.pyc/.pyo/.pyd字节码文件（防止漏网）
+*.py[cod]
+*$py.class
+
+# 忽略Python虚拟环境（可选，但建议加）
+venv/
+env/
+.venv/
+.env/
+
+# 忽略Python编译的扩展文件
+*.so
+
+# 忽略开发工具生成的缓存（可选）
+.idea/
+.vscode/
+*.swp
+*.swo
